@@ -16,9 +16,9 @@ V1\Euglena_grad_lateral\Euglena_grad_lateral
 
 
 Env:
-
-conda create -n bio_env python=3.11
-
-conda activate bio_env
-
-pip install numpy pandas trackpy opencv-python matplotlib
+    
+    conda create -n bio_env python=3.11
+    
+    conda activate bio_env
+    
+    pip install numpy pandas trackpy opencv-python matplotlib

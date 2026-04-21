@@ -1,47 +1,62 @@
-# tracker.py
 import cv2
 import pandas as pd
 import numpy as np
 import trackpy as tp
+import os
+import config  # <--- 匯入集中管理的設定檔
 
-def extract_positions(video_path,max_frames=-1):
-    if(max_frames!=-1):
-        print(f"正在讀取影片 (僅處理前 {max_frames} 影格):\n{video_path}")
+# ==========================================
+# 1. 強化版影像預處理 (Otsu + Morphological Closing)
+# ==========================================
+def extract_positions(video_path, max_frames=-1):
+    if max_frames != -1:
+        print(f"正在使用 Otsu+形態學 提取座標 (前 {max_frames} 影格):\n{video_path}")
     else:
-        print(f"正在讀取影片 (處理全影格):\n{video_path}")
-    
+        print(f"正在使用 Otsu+形態學 提取座標 (全影格):\n{video_path}")
+        
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print("錯誤：無法開啟影片檔案，請檢查路徑。")
         return pd.DataFrame()
 
-    fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=40, detectShadows=False)
-    data = []
+    data_frames = []
     frame_idx = 0
     
+    # 定義形態學的 Kernel (5x5 橢圓)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    
     while cap.isOpened():
-        if(max_frames!=-1):
-            if frame_idx >= max_frames: 
-                print(f"已達到 {max_frames} 影格限制，停止提取。")
-                break
+        if max_frames != -1 and frame_idx >= max_frames: 
+            break
             
         ret, frame = cap.read()
         if not ret: break
         
+        # --- 影像處理 Pipeline ---
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        fgmask = fgbg.apply(blurred)
         
-        contours, _ = cv2.findContours(fgmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # 使用 Otsu 尋找最佳閾值並二值化
+        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
+        # 形態學閉運算 (填補失焦破洞)
+        morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
+        
+        # 尋找輪廓
+        contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # 提取座標與面積
+        frame_data = []
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if 15 < area < 400:
+            # 使用 config 裡面的面積限制
+            if config.AREA_MIN < area < config.AREA_MAX:
                 M = cv2.moments(cnt)
                 if M['m00'] > 0:
                     cx = M['m10'] / M['m00']
                     cy = M['m01'] / M['m00']
                     
+                    # 恢復擬合身體角度
                     body_orientation = np.nan
                     if len(cnt) >= 5:
                         try:
@@ -49,41 +64,50 @@ def extract_positions(video_path,max_frames=-1):
                             body_orientation = np.radians(angle)
                         except: pass
                     
-                    data.append({
+                    frame_data.append({
                         'frame': frame_idx, 
                         'x': cx, 'y': cy, 
                         'area': area,
                         'body_angle': body_orientation
                     })
         
-        if frame_idx % 100 == 0: print(f"已處理 {frame_idx} 幀...")
+        if frame_data:
+            data_frames.append(pd.DataFrame(frame_data))
+            
+        if frame_idx % 100 == 0: 
+            print(f"已處理 {frame_idx} 幀...")
         frame_idx += 1
         
     cap.release()
-    return pd.DataFrame(data)
+    
+    if data_frames:
+        return pd.concat(data_frames, ignore_index=True)
+    else:
+        return pd.DataFrame()
 
+# ==========================================
+# 2. 軌跡連結 (Trackpy)
+# ==========================================
 def link_data(df):
     print("正在連結軌跡...")
-    t = tp.link_df(df, search_range=20, memory=3)
-    t_filtered = tp.filter_stubs(t, threshold=20)
+    # 使用 config 裡面的 Trackpy 參數
+    t = tp.link_df(df, search_range=config.SEARCH_RANGE, memory=config.MEMORY)
+    t_filtered = tp.filter_stubs(t, threshold=config.THRESHOLD)
     
-    # 【關鍵修復】暴力解除 Pandas 的 Index/Column 歧義
-    # 1. 抹除索引的名稱，避免 Pandas 把索引誤認為 'frame' 欄位
     t_filtered.index.name = None
-    # 2. 將索引強制重設為純數字 (0, 1, 2...)
     t_filtered = t_filtered.reset_index(drop=True)
     
     print(f"有效軌跡數量: {t_filtered['particle'].nunique()}")
     return t_filtered
 
-
+# ==========================================
+# 3. 物理量計算 (相位角)
+# ==========================================
 def calculate_movement_angles(df):
     print("正在計算運動相位角...")
-    # 再次確認索引乾淨
     df.index.name = None
     df = df.reset_index(drop=True)
     
-    # 現在可以安全地對 'particle' 和實體欄位 'frame' 進行排序了
     df = df.sort_values(by=['particle', 'frame']).copy()
     
     df['dx'] = df.groupby('particle')['x'].diff()

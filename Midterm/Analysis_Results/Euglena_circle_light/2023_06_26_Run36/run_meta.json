@@ -1,0 +1,11 @@
+{
+    "AREA_MAX": 1000,
+    "AREA_MIN": 30,
+    "LIGHT_SPAN": null,
+    "MAX_FRAMES": -1,
+    "MEMORY": 5,
+    "OUTPUT_DIR": "./Analysis_Results/Euglena_circle_light/2023_06_26_Run36",
+    "SEARCH_RANGE": 30,
+    "THRESHOLD": 10,
+    "VIDEO_FILE": "/mnt/j/BiologicalPhysics/V1/Euglena_circle_light/Euglena_circle_light/2023_06_26_Euglena_36/2023_06_26_Euglena_36.h264"
+}

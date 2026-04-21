@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import seaborn as sns  # <--- 新增這行，用於繪製邊際分佈密度圖
 
 # ==========================================
 # 輔助函數：支援吃入 CSV 路徑或直接吃 DataFrame
@@ -239,6 +240,202 @@ def plot_raw_scatter(data, out_dir):
     plt.close()
     
     print(f"原始散佈圖已儲存為 {save_path_3x1} 與 {save_path_xy}")
+
+
+# ==========================================
+# 6. 繪製速度與角速度隨時間的變化 (Top 5 個體)
+# ==========================================
+def plot_speed_kinematics(data, out_dir):
+    print("正在繪製個體速度與角速度圖表...")
+    df = _load_data(data)
+    if df is None or df.empty: return
+
+    # 計算物理量
+    df['speed'] = np.sqrt(df['dx']**2 + df['dy']**2)
+    df['angular_speed'] = np.degrees(np.abs(df['d_phi']))
+
+    track_lengths = df['particle'].value_counts()
+    top_particles = track_lengths.head(5).index.tolist()
+    
+    fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    
+    for p_id in top_particles:
+        p_data = df[df['particle'] == p_id].sort_values('frame')
+        frames = p_data['frame']
+        
+        # 畫線速度
+        axes[0].plot(frames, p_data['speed'], linewidth=1.5, label=f'ID: {p_id}', alpha=0.8)
+        # 畫角速度
+        axes[1].plot(frames, p_data['angular_speed'], linewidth=1.5, alpha=0.8)
+
+    axes[0].set_title("Linear Speed |v| vs Time (Top 5)")
+    axes[0].set_ylabel("Speed (pixels/frame)")
+    axes[0].legend(loc='upper right', ncol=2, fontsize='small')
+    axes[0].grid(True, linestyle='--', alpha=0.6)
+
+    axes[1].set_title("Angular Speed |\u03c9| vs Time (Top 5)")
+    axes[1].set_ylabel("Angular Speed (deg/frame)")
+    axes[1].set_xlabel("Time (Frames)")
+    axes[1].grid(True, linestyle='--', alpha=0.6)
+
+    plt.tight_layout()
+    save_path = os.path.join(out_dir, '07_speed_kinematics.png')
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    print(f"速度動力學圖表已儲存為 {save_path}")
+
+# ==========================================
+# 7. 繪製速度與角速度的群體統計分布 (2D Histogram)
+# ==========================================
+def plot_speed_distributions(data, out_dir):
+    print("正在計算速度與角速度群體熱力圖...")
+    df = _load_data(data)
+    if df is None or df.empty: return
+
+    # 清洗與計算
+    df_clean = df.dropna(subset=['dx', 'dy', 'd_phi']).copy()
+    df_clean['speed'] = np.sqrt(df_clean['dx']**2 + df_clean['dy']**2)
+    df_clean['angular_speed'] = np.degrees(np.abs(df_clean['d_phi']))
+    
+    max_frame = df_clean['frame'].max()
+    time_bins = min(50, int(max_frame/10)) if max_frame > 0 else 50
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+
+    # --- 子圖 1: 線速度熱力圖 ---
+    h_v = axes[0].hist2d(df_clean['frame'], df_clean['speed'], 
+                         bins=[time_bins, 30], cmap='magma')
+    axes[0].set_title('Population Linear Speed Distribution over Time')
+    axes[0].set_ylabel('Speed (pixels/frame)')
+    fig.colorbar(h_v[3], ax=axes[0]).set_label('Agent Count')
+
+    # --- 子圖 2: 角速度熱力圖 ---
+    h_w = axes[1].hist2d(df_clean['frame'], df_clean['angular_speed'], 
+                         bins=[time_bins, 30], cmap='magma')
+    axes[1].set_title('Population Angular Speed Distribution over Time')
+    axes[1].set_ylabel('Angular Speed (deg/frame)')
+    axes[1].set_xlabel('Time (Frames)')
+    fig.colorbar(h_w[3], ax=axes[1]).set_label('Agent Count')
+
+    plt.tight_layout()
+    save_path = os.path.join(out_dir, '08_speed_population_histograms.png')
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    print(f"速度群體統計圖表已儲存為 {save_path}")
+
+# ==========================================
+# 8. 繪製群體平均時間序列與標準差陰影帶
+# ==========================================
+def plot_population_time_series_with_shade(data, out_dir, light_span=None):
+    """
+    繪製群體平均速度與角速度隨時間變化的曲線，包含標準差陰影帶。
+    light_span: tuple, 例如 (60, 120)，代表要在哪兩個影格之間畫出紅色背景(光刺激)。
+    """
+    print("正在繪製群體時間序列與標準差陰影帶...")
+    df = _load_data(data)
+    if df is None or df.empty: return
+
+    # 計算物理量
+    df['speed'] = np.sqrt(df['dx']**2 + df['dy']**2)
+    df['angular_speed'] = np.abs(df['d_phi']) # 論文圖通常用弧度或度，這裡先維持弧度，如果太小可以轉角度
+
+    # 依照影格 (frame) 進行群組，計算平均值與標準差
+    stats = df.groupby('frame').agg({
+        'speed': ['mean', 'std'], 
+        'angular_speed': ['mean', 'std']
+    }).dropna()
+
+    frames = stats.index
+
+    # 建立 2x1 的子圖，版面比例與論文圖相似
+    fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+    # --- 上圖：線速度 v ---
+    v_mean = stats['speed']['mean']
+    v_std = stats['speed']['std']
+    
+    axes[0].plot(frames, v_mean, color='blue', linewidth=2.5) # 深藍色實線
+    # 畫出淺藍色陰影 (標準差)，將下限限制在 0 以符合物理意義
+    axes[0].fill_between(frames, np.clip(v_mean - v_std, 0, None), v_mean + v_std, 
+                         color='blue', alpha=0.3, linewidth=0)
+    
+    axes[0].set_ylabel(r'$v$ [pixels/frame]', fontsize=16) # 使用 LaTeX 數學字體
+    axes[0].tick_params(labelsize=12)
+
+    # --- 下圖：角速度 |ω| ---
+    w_mean = stats['angular_speed']['mean']
+    w_std = stats['angular_speed']['std']
+    
+    axes[1].plot(frames, w_mean, color='blue', linewidth=2.5)
+    axes[1].fill_between(frames, np.clip(w_mean - w_std, 0, None), w_mean + w_std, 
+                         color='blue', alpha=0.3, linewidth=0)
+    
+    axes[1].set_ylabel(r'$|\omega|$ [rad/frame]', fontsize=16)
+    axes[1].set_xlabel(r'$t$ [frames]', fontsize=16)
+    axes[1].tick_params(labelsize=12)
+
+    # --- 加上光刺激的紅色背景區間 ---
+    if light_span:
+        start_frame, end_frame = light_span
+        for ax in axes:
+            # 畫出紅色半透明背景
+            ax.axvspan(start_frame, end_frame, color='red', alpha=0.25, lw=0)
+
+    # 美化邊框與版面
+    for ax in axes:
+        ax.set_xlim(frames.min(), frames.max())
+    
+    plt.tight_layout()
+    save_path = os.path.join(out_dir, '09_population_time_series_shaded.png')
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    print(f"✅ 群體時間序列帶狀圖已儲存為 {save_path}")
+
+
+# ==========================================
+# 9. 繪製平均速度與角速度之二維散佈圖 (附邊際密度分佈)
+# ==========================================
+def plot_mean_speed_scatter_with_marginals(data, out_dir):
+    """
+    計算每隻眼蟲的「平均線速度」與「平均角速度」，並畫出帶有 KDE 密度曲線的聯合散佈圖。
+    """
+    print("正在繪製聯合散佈圖與邊際密度分佈 (JointPlot)...")
+    df = _load_data(data)
+    if df is None or df.empty: return
+
+    # 計算物理量
+    df['speed'] = np.sqrt(df['dx']**2 + df['dy']**2)
+    df['angular_speed'] = np.abs(df['d_phi'])
+
+    # 依照 particle ID 進行群組，計算每隻個體「整段生命週期」的平均值
+    particle_stats = df.groupby('particle').agg({
+        'speed': 'mean', 
+        'angular_speed': 'mean'
+    }).dropna()
+
+    # 使用 seaborn 的 JointGrid 來建立主圖與邊緣圖的架構
+    g = sns.JointGrid(data=particle_stats, x='speed', y='angular_speed', height=8, ratio=5)
+
+    # 1. 畫主圖的散佈圖 (空心藍色圓圈)
+    g.plot_joint(plt.scatter, facecolors='none', edgecolors='blue', s=40, alpha=0.7)
+
+    # 2. 畫邊際分佈的核密度估計曲線 (KDE)
+    g.plot_marginals(sns.kdeplot, color='blue', linewidth=3)
+
+    # 3. 設定標籤 (使用 LaTeX 格式匹配你的範例圖)
+    g.ax_joint.set_xlabel(r'mean $v$ [pixels/frame]', fontsize=16)
+    g.ax_joint.set_ylabel(r'mean $|\omega|$ [rad/frame]', fontsize=16)
+    g.ax_joint.tick_params(labelsize=12)
+
+    # 自動調整範圍，讓它從 0 開始
+    g.ax_joint.set_xlim(left=0)
+    g.ax_joint.set_ylim(bottom=0)
+
+    plt.tight_layout()
+    save_path = os.path.join(out_dir, '10_scatter_meanOnTime.png')
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    print(f"✅ 帶邊際分佈的二維散佈圖已儲存為 {save_path}")
 
 # ==========================================
 # 測試區塊 (僅供單獨執行此檔案時測試用)
